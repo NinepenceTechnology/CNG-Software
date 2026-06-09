@@ -1,0 +1,8 @@
+{
+  "name": "CNG SOFTWARE",
+  "description": "Sistema completo de gestão eclesiástica para a Igreja Centro da Nova Geração. Recomenda-se a instalação como aplicativo (PWA) na primeira utilização para melhor experiência.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

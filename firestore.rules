@@ -1,0 +1,162 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net: Default Deny (Unsecured collections default to blocked)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Fundamental Common Helpers (Pillars 1 & 3) ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.email == 'florindoninepence@gmail.com');
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && request.auth.token.email == 'florindoninepence@gmail.com';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isBootstrappedAdmin() || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'admin')
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\- .ºª/áãâéêíóôúçÁÃÂÉÊÍÓÔÚÇ]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Schema and Shape Validation Helpers (Pillar 2: The Anti-Update-Gap) ---
+    function isValidMember(m) {
+      return m.name is string && m.name.size() > 0 && m.name.size() <= 100 &&
+             m.status is string && (m.status == 'ativo' || m.status == 'inativo' || m.status == 'visitante');
+    }
+
+    function isValidTransaction(t) {
+      return t.type is string && (t.type == 'dizimo' || t.type == 'oferta' || t.type == 'contribuicao' || t.type == 'despesa') &&
+             t.amount is number && t.amount > 0 &&
+             t.status is string && (t.status == 'pago' || t.status == 'pendente');
+    }
+
+    function isValidChurchEvent(e) {
+      return e.title is string && e.title.size() > 0 && e.title.size() <= 200;
+    }
+
+    function isValidInventoryItem(i) {
+      return i.name is string && i.name.size() > 0 && i.name.size() <= 100 &&
+             i.status is string && (i.status == 'bom estado' || i.status == 'avariado' || i.status == 'obsoleto' || i.status == 'vendido');
+    }
+
+    function isValidReport(r) {
+      return r.branchId is string && r.branchId.size() > 0 && r.branchId.size() <= 100;
+    }
+
+    function isValidUser(u) {
+      return u.name is string && u.name.size() > 0 && u.role is string;
+    }
+
+    function isValidChatMessage(m) {
+      return m.user is string && m.user.size() <= 100 &&
+             m.text is string && m.text.size() <= 2000 &&
+             m.userId == request.auth.uid;
+    }
+
+    function isValidNotification(n) {
+      return n.title is string && n.title.size() <= 200 &&
+             n.message is string && n.message.size() <= 1000 &&
+             n.read is bool;
+    }
+
+    // --- Branch Match Blocks (Pillar 1: Relationship Mapping) ---
+    match /branches/{branchId} {
+      allow read: if isSignedIn() && isValidId(branchId);
+      
+      match /members/{memberId} {
+        allow read: if isSignedIn() && isValidId(branchId) && isValidId(memberId);
+        allow create: if isEmailVerified() && isValidId(branchId) && isValidId(memberId) && isValidMember(incoming()) && (incoming().createdAt == request.time);
+        allow update: if isEmailVerified() && isValidId(branchId) && isValidId(memberId) && isValidMember(incoming());
+        allow delete: if isAdmin() && isValidId(branchId) && isValidId(memberId);
+      }
+      
+      match /transactions/{transactionId} {
+        allow read: if isSignedIn() && isValidId(branchId) && isValidId(transactionId);
+        allow create: if isEmailVerified() && isValidId(branchId) && isValidId(transactionId) && isValidTransaction(incoming()) && (incoming().createdAt == request.time || incoming().date != null);
+        allow update: if isEmailVerified() && isValidId(branchId) && isValidId(transactionId) && isValidTransaction(incoming());
+        allow delete: if isAdmin() && isValidId(branchId) && isValidId(transactionId);
+      }
+      
+      match /events/{eventId} {
+        allow read: if isSignedIn() && isValidId(branchId) && isValidId(eventId);
+        allow create: if isEmailVerified() && isValidId(branchId) && isValidId(eventId) && isValidChurchEvent(incoming()) && (incoming().createdAt == request.time);
+        allow update: if isEmailVerified() && isValidId(branchId) && isValidId(eventId) && isValidChurchEvent(incoming());
+        allow delete: if isAdmin() && isValidId(branchId) && isValidId(eventId);
+      }
+      
+      match /inventory/{itemId} {
+        allow read: if isSignedIn() && isValidId(branchId) && isValidId(itemId);
+        allow create: if isEmailVerified() && isValidId(branchId) && isValidId(itemId) && isValidInventoryItem(incoming());
+        allow update: if isEmailVerified() && isValidId(branchId) && isValidId(itemId) && isValidInventoryItem(incoming());
+        allow delete: if isAdmin() && isValidId(branchId) && isValidId(itemId);
+      }
+      
+      match /reports/{reportId} {
+        allow read: if isSignedIn() && isValidId(branchId) && isValidId(reportId);
+        allow create: if isEmailVerified() && isValidId(branchId) && isValidId(reportId) && isValidReport(incoming()) && (incoming().createdAt == request.time);
+        allow update: if isEmailVerified() && isValidId(branchId) && isValidId(reportId) && isValidReport(incoming());
+        allow delete: if isAdmin() && isValidId(branchId) && isValidId(reportId);
+      }
+    }
+
+    // --- User Profiles ---
+    match /users/{userId} {
+      allow read: if (isSignedIn() && (request.auth.uid == userId || isAdmin())) || userId.matches('^code_.*');
+      allow create: if isEmailVerified() && (request.auth.uid == userId || isAdmin() || (userId.matches('^code_.*') && !exists(/databases/$(database)/documents/users/$(userId)))) && isValidUser(incoming());
+      allow update: if isEmailVerified() && (request.auth.uid == userId || isAdmin()) && isValidUser(incoming()) && (incoming().role == existing().role || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // --- Interactive Chat Messaging (Pillar 5: Identity Safeguards) ---
+    match /chat_channels/{channelId}/messages/{messageId} {
+      allow read: if isSignedIn() && isValidId(channelId) && isValidId(messageId);
+      allow create: if isEmailVerified() && isValidId(channelId) && isValidId(messageId) && isValidChatMessage(incoming()) && (incoming().timestamp == request.time);
+      allow update: if false; // Messages are immutable
+      allow delete: if isAdmin();
+    }
+
+    // --- Push Notifications and Read State (Pillar 4: Tiered Identity Logic) ---
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && isValidId(notificationId);
+      allow create: if isEmailVerified() && isValidId(notificationId) && isValidNotification(incoming()) && (incoming().createdAt == request.time);
+      allow update: if isEmailVerified() && isValidId(notificationId) && isValidNotification(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+      allow delete: if isAdmin();
+    }
+
+    // --- System Connectivity Check Target ---
+    match /system/{document=**} {
+      allow read: if true;
+    }
+
+    // --- Global Church Brand Config ---
+    match /settings/church {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
